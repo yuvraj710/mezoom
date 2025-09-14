@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeZoom - Video Conferencing</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/socket.io-client@4/dist/socket.io.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 40px; color: white; }
+        .card { background: white; border-radius: 12px; padding: 30px; margin: 20px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .btn { background: #4f46e5; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 16px; margin: 10px; }
+        .btn:hover { background: #4338ca; }
+        .btn-danger { background: #dc2626; }
+        .btn-danger:hover { background: #b91c1c; }
+        .input { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; margin: 10px 0; font-size: 16px; }
+        .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
+        .video-container { position: relative; background: #1f2937; border-radius: 12px; aspect-ratio: 16/9; overflow: hidden; }
+        .video-container video { width: 100%; height: 100%; object-fit: cover; }
+        .video-placeholder { display: flex; align-items: center; justify-content: center; height: 100%; color: white; font-size: 18px; }
+        .controls { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); padding: 15px; border-radius: 25px; }
+        .controls button { margin: 0 5px; padding: 10px; border-radius: 50%; border: none; cursor: pointer; }
+        .chat { position: fixed; right: 20px; top: 20px; width: 300px; height: 400px; background: white; border-radius: 12px; display: flex; flex-direction: column; }
+        .chat-messages { flex: 1; padding: 15px; overflow-y: auto; }
+        .chat-input { padding: 15px; border-top: 1px solid #e5e7eb; }
+        .message { margin: 10px 0; padding: 8px 12px; border-radius: 8px; }
+        .message.own { background: #4f46e5; color: white; margin-left: 20px; }
+        .message.other { background: #f3f4f6; color: #374151; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const socket = io();
+
+        function App() {
+            const [currentView, setCurrentView] = useState('home');
+            const [meetingId, setMeetingId] = useState('');
+            const [username, setUsername] = useState('');
+            const [participants, setParticipants] = useState([]);
+            const [messages, setMessages] = useState([]);
+            const [newMessage, setNewMessage] = useState('');
+            const [isVideoEnabled, setIsVideoEnabled] = useState(false);
+            const [isAudioEnabled, setIsAudioEnabled] = useState(false);
+            const [localStream, setLocalStream] = useState(null);
+            const [peerConnections, setPeerConnections] = useState({});
+            const localVideoRef = useRef(null);
+
+            useEffect(() => {
+                socket.on('room-joined', (data) => {
+                    setParticipants(data.participants);
+                });
+
+                socket.on('user-joined', (data) => {
+                    setParticipants(prev => [...prev, data]);
+                });
+
+                socket.on('user-left', (data) => {
+                    setParticipants(prev => prev.filter(p => p.socketId !== data.socketId));
+                });
+
+                socket.on('offer', handleOffer);
+                socket.on('answer', handleAnswer);
+                socket.on('ice-candidate', handleIceCandidate);
+                socket.on('chat-message', (data) => {
+                    setMessages(prev => [...prev, data]);
+                });
+
+                return () => {
+                    if (localStream) {
+                        localStream.getTracks().forEach(track => track.stop());
+                    }
+                };
+            }, []);
+
+            const createMeeting = async () => {
+                try {
+                    const response = await fetch('/api/meetings/create', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: 'New Meeting' })
+                    });
+                    const data = await response.json();
+                    setMeetingId(data.meeting.id);
+                    setCurrentView('meeting');
+                    await startVideo();
+                } catch (error) {
+                    alert('Failed to create meeting');
+                }
+            };
+
+            const joinMeeting = async () => {
+                if (!meetingId.trim()) {
+                    alert('Please enter a meeting ID');
+                    return;
+                }
+                try {
+                    const response = await fetch(`/api/meetings/${meetingId}`);
+                    if (response.ok) {
+                        setCurrentView('meeting');
+                        await startVideo();
+                    } else {
+                        alert('Meeting not found');
+                    }
+                } catch (error) {
+                    alert('Failed to join meeting');
+                }
+            };
+
+            const startVideo = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    setLocalStream(stream);
+                    if (localVideoRef.current) {
+                        localVideoRef.current.srcObject = stream;
+                    }
+                    setIsVideoEnabled(true);
+                    setIsAudioEnabled(true);
+                    socket.emit('join-room', { meetingId, username: username || 'Guest' });
+                } catch (error) {
+                    alert('Unable to access camera and microphone');
+                }
+            };
+
+            const toggleVideo = () => {
+                if (localStream) {
+                    const videoTrack = localStream.getVideoTracks()[0];
+                    if (videoTrack) {
+                        videoTrack.enabled = !videoTrack.enabled;
+                        setIsVideoEnabled(videoTrack.enabled);
+                    }
+                }
+            };
+
+            const toggleAudio = () => {
+                if (localStream) {
+                    const audioTrack = localStream.getAudioTracks()[0];
+                    if (audioTrack) {
+                        audioTrack.enabled = !audioTrack.enabled;
+                        setIsAudioEnabled(audioTrack.enabled);
+                    }
+                }
+            };
+
+            const sendMessage = () => {
+                if (newMessage.trim()) {
+                    socket.emit('chat-message', { meetingId, message: newMessage });
+                    setNewMessage('');
+                }
+            };
+
+            const handleOffer = async (data) => {
+                const peerConnection = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+                
+                if (localStream) {
+                    localStream.getTracks().forEach(track => {
+                        peerConnection.addTrack(track, localStream);
+                    });
+                }
+
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', { target: data.sender, candidate: event.candidate });
+                    }
+                };
+
+                await peerConnection.setRemoteDescription(data.offer);
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                socket.emit('answer', { target: data.sender, answer });
+            };
+
+            const handleAnswer = async (data) => {
+                const peerConnection = peerConnections[data.sender];
+                if (peerConnection) {
+                    await peerConnection.setRemoteDescription(data.answer);
+                }
+            };
+
+            const handleIceCandidate = async (data) => {
+                const peerConnection = peerConnections[data.sender];
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(data.candidate);
+                }
+            };
+
+            if (currentView === 'home') {
+                return (
+                    <div className="container">
+                        <div className="header">
+                            <h1>🎥 MeZoom</h1>
+                            <p>Video conferencing made simple</p>
+                        </div>
+                        
+                        <div className="card">
+                            <h2>Create Meeting</h2>
+                            <input
+                                type="text"
+                                placeholder="Your name (optional)"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                className="input"
+                            />
+                            <button onClick={createMeeting} className="btn">
+                                Start Meeting
+                            </button>
+                        </div>
+
+                        <div className="card">
+                            <h2>Join Meeting</h2>
+                            <input
+                                type="text"
+                                placeholder="Meeting ID"
+                                value={meetingId}
+                                onChange={(e) => setMeetingId(e.target.value)}
+                                className="input"
+                            />
+                            <button onClick={joinMeeting} className="btn">
+                                Join Meeting
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div style={{ background: '#1f2937', minHeight: '100vh', color: 'white' }}>
+                    <div style={{ padding: '20px', textAlign: 'center' }}>
+                        <h2>Meeting: {meetingId}</h2>
+                        <p>{participants.length + 1} participants</p>
+                    </div>
+
+                    <div className="video-grid">
+                        <div className="video-container">
+                            {isVideoEnabled ? (
+                                <video ref={localVideoRef} autoPlay muted playsInline />
+                            ) : (
+                                <div className="video-placeholder">
+                                    <div>
+                                        <div style={{ fontSize: '48px', marginBottom: '10px' }}>👤</div>
+                                        <div>{username || 'You'}</div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {participants.map((participant, index) => (
+                            <div key={index} className="video-container">
+                                <div className="video-placeholder">
+                                    <div>
+                                        <div style={{ fontSize: '48px', marginBottom: '10px' }}>👤</div>
+                                        <div>{participant.username}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="controls">
+                        <button
+                            onClick={toggleVideo}
+                            style={{ background: isVideoEnabled ? '#4f46e5' : '#dc2626' }}
+                        >
+                            📹
+                        </button>
+                        <button
+                            onClick={toggleAudio}
+                            style={{ background: isAudioEnabled ? '#4f46e5' : '#dc2626' }}
+                        >
+                            🎤
+                        </button>
+                        <button onClick={() => setCurrentView('home')} className="btn-danger">
+                            Leave
+                        </button>
+                    </div>
+
+                    <div className="chat">
+                        <div className="chat-messages">
+                            {messages.map((msg, index) => (
+                                <div key={index} className={`message ${msg.socketId === socket.id ? 'own' : 'other'}`}>
+                                    <strong>{msg.senderName}:</strong> {msg.message}
+                                </div>
+                            ))}
+                        </div>
+                        <div className="chat-input">
+                            <input
+                                type="text"
+                                placeholder="Type a message..."
+                                value={newMessage}
+                                onChange={(e) => setNewMessage(e.target.value)}
+                                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                                style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: '4px' }}
+                            />
+                            <button onClick={sendMessage} className="btn" style={{ marginTop: '10px', width: '100%' }}>
+                                Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

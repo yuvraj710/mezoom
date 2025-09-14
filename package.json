@@ -1,0 +1,21 @@
+{
+  "name": "mezoom-video-conferencing",
+  "version": "1.0.0",
+  "description": "A video conferencing web application similar to Google Meet or Zoom",
+  "main": "server/index.js",
+  "scripts": {
+  "dev": "concurrently \"npm run server\" \"npm run client\"",
+  "server": "cd server && nodemon index.js",
+  "client": "cd client && npm start",
+  "build": "cd client && npm run build",
+  "install-all": "npm install && cd server && npm install && cd ../client && npm install",
+  "start": "cd server && node index.js"
+},
+
+  "keywords": ["video-conferencing", "webrtc", "socket.io", "react", "nodejs"],
+  "author": "MeZoom Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
