@@ -4,7 +4,7 @@
   "description": "Backend server for MeZoom video conferencing application",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node server/index.js",
     "dev": "nodemon index.js",
     "db:setup": "node scripts/setup-db.js",
     "db:seed": "node scripts/seed-db.js"
